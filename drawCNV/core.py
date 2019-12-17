@@ -8,14 +8,36 @@ import matplotlib.pyplot as plt
 from gtfparse import read_gtf
 from .util import *
 import logging
-import re, os
+import re, os, sys
 from copy import deepcopy
 
 logging.basicConfig(level=logging.DEBUG, format='%(levelname)s::%(message)s')
 
-def read_matrix(filename, delimiter = '\t', rowname = 0, workdir = 'CNVmap_output'):
-    '''Read the matrix file into formatted data type'''
-    lines = iter_lines(open(filename, 'r'))
+def read_matrix(file_name, delimiter = '\t', rowname = 0, 
+                workdir = 'CNVmap_output'):
+    '''
+    Read the matrix file into standard AnnData object.
+    Arguments:
+    ----------
+    file_name - str, path like. 
+                File name including relative or absolute path.
+    delimiter - str. Default "\\t"
+                The delimiter for the matrix table file. 
+    rowname   - int. Default 0.
+                In which column the feature identifiers are specified. 
+                0-based index.
+    workdir   - str, path like. Default "CNVmap_output".
+                Where the output would be saved to.
+    Returns:
+    ----------
+    adata - AnnData object: 
+            - Numeric matrix saved in adata.X
+            - Sample attributes saved in ad adata.obs
+            - Feature (gene) attributes saved in adata.var
+            - Other information saved in adata.uns
+    See anndata.AnnData.
+    '''
+    lines = iter_lines(open(file_name, 'r'))
     col_to_skip = 0
     data = []
     rownames = []
@@ -65,22 +87,22 @@ def read_matrix(filename, delimiter = '\t', rowname = 0, workdir = 'CNVmap_outpu
     return adata
 
 def add_cell_labels(adata, file_name):
-    """Add cell lables.
+    """
+    Add cell lables.
     from https://github.com/pinellolab/STREAM/blob/master/stream/core.py#L237
-    Parameters
+    Arguments:
     ----------
-    adata: AnnData
-        Annotated data matrix.
-    fig_path: `str`, optional (default: '')
-        The file path of cell label file.
-    fig_name: `str`, optional (default: None)
-        The file name of cell label file. If file_name is not specified, 'unknown' is added as the label for all cells.
-        
-    Returns
-    -------
+    adata    - AnnData object.
+               Annotated data matrix.
+    fig_name - str, path like.
+               The file name of cell label file. File content contains one 
+               label string per line which corresponds to a sample in the 
+               matrix in the same order.
+    Returns:
+    ----------
     updates `adata` with the following fields.
-    label: `pandas.core.series.Series` (`adata.obs['label']`,dtype `str`)
-        Array of #observations that stores the label of each cell.
+    label - pandas.core.series.Series, at adata.obs['label']
+            Array of #observations that stores the label of each cell.
     """
     df_labels = pd.read_csv(file_name, sep = '\t', header = None, 
        index_col = None, names = ['label'], dtype = str, 
@@ -89,25 +111,28 @@ def add_cell_labels(adata, file_name):
     df_labels.index = adata.obs_names
     adata.obs['label'] = df_labels
 
-def add_cell_colors(adata,file_path='',file_name=None):
-    """Add cell colors.
+def add_cell_colors(adata, file_name):
+    """
+    Add cell colors.
     from https://github.com/pinellolab/STREAM/blob/master/stream/core.py#L269
-    Parameters
+    Arguments:
     ----------
-    adata: AnnData
-        Annotated data matrix.
-    fig_path: `str`, optional (default: '')
-        The file path of cell label color file.
-    fig_name: `str`, optional (default: None)
-        The file name of cell label color file. If file_name is not specified, random color are generated for each cell label.
-        
-    Returns
-    -------
+    adata    - AnnData object.
+               Annotated data matrix.
+    fig_name - str, path lke. 
+               The file name of cell label color file. File content contains 
+               two columns delimited with <tab>. The first column comes with 
+               unique labels according to the label file, and the second 
+               column comes with a color code.
+    Returns:
+    ----------
     updates `adata` with the following fields.
-    label_color: `pandas.core.series.Series` (`adata.obs['label_color']`,dtype `str`)
-        Array of #observations that stores the color of each cell (hex color code).
-    label_color: `dict` (`adata.uns['label_color']`,dtype `str`)
-        Array of #observations that stores the color of each cell (hex color code).        
+    label_color - pandas.core.series.Series, at adata.obs['label_color']
+                  Array of #observations that stores the color of each cell 
+                  (hex color code).
+    label_color - dict, at adata.uns['label_color']
+                  Array of #observations that stores the color of each cell 
+                  (hex color code).        
     """
     labels_unique = adata.obs['label'].unique()
     
@@ -115,7 +140,8 @@ def add_cell_colors(adata,file_path='',file_name=None):
         index_col = None, names = ['label', 'color'], dtype = str, 
         compression = 'gzip' if file_name.split('.')[-1]=='gz' else None)
     df_colors['label'] = df_colors['label'].str.replace('/', '-')   
-    adata.uns['label_color'] = {df_colors.iloc[x, 0]: df_colors.iloc[x, 1] for x in range(df_colors.shape[0])}
+    adata.uns['label_color'] = {df_colors.iloc[x, 0]: df_colors.iloc[x, 1] \
+                                for x in range(df_colors.shape[0])}
 
     df_cell_colors = adata.obs.copy()
     df_cell_colors['label_color'] = ''
@@ -125,48 +151,99 @@ def add_cell_colors(adata,file_path='',file_name=None):
     adata.obs['label_color'] = df_cell_colors['label_color']
 
 def log2Transformation(adata):
+    '''
+    Log2(N + 1) transformation on the array data.
+    Arguments:
+    ----------
+    adata - AnnData object.
+            Annotated data matrix.
+    Returns:
+    ----------
+    updates `adata` with the following fields.
+    X - numpy.ndarray, at adata.X
+    The transformed data matrix will replace the original array. 
+    '''
     logging.info('Log2 Transforming')
     adata.X = np.log2(adata.X+1)
 
 def remove_mt_genes(adata):
     """remove mitochondrial genes.
     from https://github.com/pinellolab/STREAM/blob/master/stream/core.py#L455
+    Arguments:
+    ----------
+    adata - AnnData object.
+            Annotated data matrix.
+    Returns:
+    ----------
+    updates `adata` with a subset of genes that excluded mitochondrial genes. 
     """        
-    r = re.compile("^MT-",flags=re.IGNORECASE)
+    r = re.compile("^MT-", flags = re.IGNORECASE)
     mt_genes = list(filter(r.match, adata.var_names))
-    if(len(mt_genes)>0):
+    if len(mt_genes) > 0:
         logging.info('remove mitochondrial genes:')
-        print(mt_genes)
+        sys.stdout.write(str(mt_genes))
         gene_subset = ~adata.var_names.isin(mt_genes)
         adata._inplace_subset_var(gene_subset)
 
-def filter_genes(adata, min_num_cells = None, min_pct_cells = None, min_count = None, expr_cutoff = 1):
+def filter_genes(adata, min_num_cells = None, min_pct_cells = None, 
+                 min_count = None, expr_cutoff = 1):
     '''
-    from
-    https://github.com/pinellolab/STREAM/blob/master/stream/core.py#L331
+    Filter out genes based on different metrics.
+    from https://github.com/pinellolab/STREAM/blob/master/stream/core.py#L331
+    Arguments:
+    ----------
+    adata         - AnnData object.
+                    Annotated data matrix.
+    min_num_cells - int, default None. 
+                    Minimum number of cells expressing one gene
+    min_pct_cells - float, default None. 
+                    Minimum percentage of cells expressing one gene
+    min_count     - int, default None. 
+                    Minimum number of read count for one gene
+    expr_cutoff   - float, default 1. 
+                    Expression cutoff. If greater than expr_cutoff, the gene 
+                    is considered 'expressed'. 
+    Returns:
+    ----------
+    updates `adata` with a subset of genes that pass the filtering. 
     '''
     n_counts = np.sum(adata.X, axis = 0)
     adata.var['n_counts'] = n_counts
     n_cells = np.sum(adata.X > expr_cutoff, axis = 0)
     adata.var['n_cells'] = n_cells
-    if(sum(list(map(lambda x: x is None,[min_num_cells,min_pct_cells,min_count])))==3):
+    if sum(list(map(lambda x: x is None,[min_num_cells,min_pct_cells,min_count]))) == 3:
         logging.info('No gene filtering')
     else:
-        gene_subset = np.ones(len(adata.var_names),dtype=bool)
-        if(min_num_cells!=None):
+        gene_subset = np.ones(len(adata.var_names), dtype = bool)
+        if min_num_cells != None:
             logging.info('Filter genes based on min_num_cells')
-            gene_subset = (n_cells>min_num_cells) & gene_subset
-        if(min_pct_cells!=None):
+            gene_subset = (n_cells > min_num_cells) & gene_subset
+        if min_pct_cells != None:
             logging.info('Filter genes based on min_pct_cells')
-            gene_subset = (n_cells>adata.shape[0]*min_pct_cells) & gene_subset
-        if(min_count!=None):
+            gene_subset = (n_cells > adata.shape[0] * min_pct_cells) & gene_subset
+        if min_count != None:
             logging.info('Filter genes based on min_count')
-            gene_subset = (n_counts>min_count) & gene_subset 
+            gene_subset = (n_counts > min_count) & gene_subset 
         adata._inplace_subset_var(gene_subset)
         logging.info('After filtering out low-expressed genes: {} cells, {} genes'.format(adata.shape[0], adata.shape[1]))
 
-
 def order_genes_by_gtf(adata, GTF_file_name, ident = 'gene_name'):
+    '''
+    Place the gene in the order that follows the annotations from a GTF file. 
+    Arguments:
+    ----------
+    adata         - AnnData object.
+                    Annotated data matrix.
+    GTF_file_name - str, path like.
+                    The file name of the GTF file.
+    ident         - str, default "gene_name"
+                    The identifier type of the genes in the matrix. Choose 
+                    based on the ninth column of the GTF file.
+    Returns:
+    ----------
+    adata - AnnData object. 
+            A new object where the order of genes updated. 
+    '''
     logging.info('Sorting with GTF annotation: {}'.format(GTF_file_name))
     if ident not in {'gene_id', 'gene_name'}:
         raise ValueError("Identifier must be set within {'gene_id', 'gene_name'}")
@@ -201,6 +278,25 @@ def order_genes_by_gtf(adata, GTF_file_name, ident = 'gene_name'):
     return adata
 
 def zscore_norm(adata, against = None, by = 'gene'):
+    '''
+    Z-score normalization of the expression profile.
+    Arguments:
+    ----------
+    adata   - AnnData object.
+              Annotated data matrix.
+    against - AnnData object, default None. 
+              Another adata where a contol expression profile is saved in. 
+              If None, normalization will be done against the adata itself. 
+    by      - str, default "gene".
+              Choose from {"gene", "cell"}. If by "gene", the mean and variance 
+              of each gene will be used for substraction and division, 
+              respectively. 
+    Returns:
+    ----------
+    updates `adata` with the following fields.
+    normalized - numpy.ndarray, at adata.uns['normalized'].
+                 The normalized data matrix.
+    '''
     logging.info('Applying z-score normalization')
     input_data = adata.X.copy()
     if by == 'cell':
@@ -221,8 +317,41 @@ def zscore_norm(adata, against = None, by = 'gene'):
     adata.uns['normalized'] = Z
 
 def plot_CNVmap(adata, limit = (-5, 5), window = 150, n_cluster = 2, 
-                fig_size = (12, 8), downsampleRate = None, save_fig = False, 
+                fig_size = (12, 8), downsampleRate = 0.2, save_fig = False, 
                 fig_name = 'CNVmap.png'):
+    '''Plot the CNV map in a heatmap style with the normalized data matrix. 
+    Arguments:
+    ----------
+    adata          - AnnData object. 
+                     Annotated data matrix.
+    limit          - tuple with 2 elements, default (-5, 5)
+                     Limit the expression value to be plot within this 
+                     interval. 
+    window         - int, default 150. 
+                     Window average of the expression levels of the 
+                     neighboring N genes will be calculated for each gene, in 
+                     order to smoothen the fluctuations and avoid high 
+                     expression levels that might not come from high CNVs. 
+    n_cluster      - int, default 2. 
+                     Number of clusters to cut the hierarchical clustering 
+                     result. 
+    downsampleRate - float that > 0 and < 1, default 0.2. 
+                     Proportion of total genes to pick from. Smaller value 
+                     increases the speed and decreases the resolution. 
+    fig_size       - tuple with 2 elements, default (12, 8)
+                     The size of the output figure, in inches.
+    save_fig       - bool, default False. 
+                     Whether to save the figure. If True, figure would be 
+                     saved to "workdir"; else, the figure would show if 
+                     possible. 
+    fig_name       - str, path like, default "CNVmap.png"
+                     Name of the figure file. 
+    Returns:
+    ----------
+    updates `adata` with the following fields.
+    smoothen - numpy.ndarray, at adata.uns['smoothen']
+               The smoothened expression matrix. 
+    '''
     logging.info('Plotting CNV map')
     # Process the expression profile
     input_data = adata.uns['normalized'].copy()
@@ -231,7 +360,8 @@ def plot_CNVmap(adata, limit = (-5, 5), window = 150, n_cluster = 2,
     smoothen = np.zeros(input_data.shape)
     arm = int(round(window//2))
     for i in range(adata.n_vars):
-        smoothen[:,i] = np.mean(input_data[:, max(0, i-arm):min(adata.n_vars, i+arm)], axis = 1)
+        smoothen[:,i] = np.mean(input_data[:, max(0, i-arm): min(adata.n_vars, i+arm)], 
+                                axis = 1)
     adata.uns['smoothened'] = smoothen
     
     # Hierarchical clustering
@@ -278,107 +408,3 @@ def plot_CNVmap(adata, limit = (-5, 5), window = 150, n_cluster = 2,
         logging.info('Plot saved to {}'.format(os.path.join(adata.uns['workdir'], fig_name)))
     else:
         plt.show()
-
-# def draw_heatmap(expr_normalized, outputname, maxclust, genelist, celllist, palette):
-#     print('...Starting to draw the clustered heatmap...')
-#     expr_ave = pd.DataFrame()
-#     expr_df = pd.DataFrame(expr_normalized, columns = celllist)
-#     expr_df = set_limit(expr_df, -5, 5)
-#     expr_df = expr_df - np.mean(expr_df)
-#     chrlist = []
-#     for i in range(75, len(expr_df)-75):	
-#         expr_ave = pd.concat([expr_ave, pd.DataFrame(np.mean(expr_df[i - 75:i + 75])).T])
-#         chrlist.append(genelist[i][1])
-#     expr_ave_T = expr_ave.T
-#     expr_clust = pd.DataFrame()
-#     Z = linkage(expr_ave_T, 'ward')
-#     clusters = fcluster(Z, maxclust, criterion = 'maxclust')
-#     print('...Totally %s clusters.' % np.max(clusters))
-#     clustorder = dendrogram(Z)['leaves']
-#     last = clusters[clustorder[0]]
-#     devidepos_r = []
-#     for i in range(len(clustorder)):
-#         expr_clust = pd.concat([expr_clust, expr_ave_T[clustorder[i]:clustorder[i] + 1]])
-#         if clusters[clustorder[i]] != last:
-#             devidepos_r.append(i)
-#         last = clusters[clustorder[i]]
-#     expr_clust_T = expr_clust.T
-#     expr_small = pd.DataFrame()
-#     chrlist2 = []
-#     for i in range(0, len(expr_clust_T), 7):
-#         expr_small = pd.concat([expr_small, expr_clust_T[i:i + 1]])
-#         chrlist2.append(chrlist[i])
-#     colors = []
-#     rg = ['#516572', '#d8dcd6']
-#     last = chrlist2[0]
-#     change = 0
-#     devidepos_c = []
-#     for i in range(len(chrlist2)):
-#         if chrlist2[i] != last:
-#             change += 1
-#             devidepos_c.append(i)
-#         colors.append(rg[change % 2])    
-#         last = chrlist2[i]
-#     row_color = []
-#     for i in expr_small.keys():
-#         if palette == None:
-#             row_color.append('w')
-#             continue
-#         elif i in palette.keys():
-#             row_color.append(palette[i])
-#         else:
-#             row_color.append('w')
-#     expr_draw = expr_small.T
-#     maxofall = max(expr_draw.max())
-#     minofall = min(expr_draw.min())
-#     vvmax = 0.9 * (maxofall - minofall) / 2
-#     vvmin = - vvmax
-#     print('...Drawing')
-#     figheight = round(len(expr_draw) / 2.4, 2)
-#     sns.set(font_scale = 2.5)
-#     if len(expr_small.keys()) >= 100:
-#         figure = sns.clustermap(expr_draw, 
-#             row_cluster = False, 
-#             col_cluster = False, 
-#             row_colors = row_color, 
-#             col_colors = colors, 
-#             vmin = vvmin,
-#             vmax = vvmax,
-#             cmap = "RdBu_r", 
-#             yticklabels = False, 
-#             xticklabels = False, 
-#             figsize = (80, 40), 
-#             robust = True
-#             ) 
-#     else:
-#         figure = sns.clustermap(expr_draw, 
-#             row_cluster = False, 
-#             col_cluster = False, 
-#             row_colors = row_color, 
-#             col_colors = colors, 
-#             vmin = vvmin,
-#             vmax = vvmax,
-#             cmap = "RdBu_r", 
-#             yticklabels = True, 
-#             xticklabels = False, 
-#             figsize = (80, figheight), 
-#             robust = True
-#             ) 
-#     sample_color = {'Tumor': '#C65911', 'Normal': '#FCE4D6'}
-#     ax = figure.ax_heatmap
-#     for i in devidepos_r:
-#         ax.plot([0, len(chrlist2)], [i, i], '-k', linewidth = 1.5)
-#     for i in devidepos_c:
-#         ax.plot([i, i], [0, len(expr_draw)], '-k', linewidth = 1.5)
-# ###This part is special for labeling all samples of all patients
-# #    for lab in list(sample_color.keys()):
-# #        figure.ax_col_dendrogram.bar(0, 0, color = sample_color[lab], 
-# #                                     label = lab, 
-# #                                     linewidth = 1)
-# #    figure.ax_col_dendrogram.legend(loc = "center", ncol = 2)
-#     figure.cax.set_position([.07, .2, .03, .45])
-#     plt.savefig(outputname)
-#     print('...A figure is saved to "%s" at your working directory.' % outputname)
-
-
-
