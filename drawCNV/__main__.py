@@ -4,8 +4,9 @@ from .core import *
 from .util import *
 import logging
 import warnings
+import sys, os
 
-warnings.simplefilter('ignore')
+logging.basicConfig(level = logging.INFO, format = '%(asctime)s - %(levelname)s - %(message)s')
 
 def getargs():
     parser = argparse.ArgumentParser(description = 
@@ -44,38 +45,50 @@ def getargs():
     # Others
     parser.add_argument('-o', '--output', default = "CNVmap_output", metavar = 'PATH', 
         help = 'The path of the output image files. default "CNVmap_output". ')
-    
     args = parser.parse_args()
     return args
 
 def main():
     # Basic configuration
-    logging.basicConfig(level = logging.DEBUG, 
-                        format = '%(levelname)s::%(message)s')
     args = getargs()
 
     # Preprocess the matrix of interest
-    logging.info('Reading the expression profile')
+    logging.info('Reading the expression profile: {}'.format(args.matrix))
     adata = read_matrix(args.matrix, 
                         rowname = args.rowname_matrix, 
                         workdir = args.output)
+    logging.info('Adding cell labels from: {}'.format(args.label))
+    add_cell_labels(adata, args.label)
+    logging.info('Adding label colors from: {}'.format(args.label_color))
+    add_cell_colors(adata, args.label_color)
+    logging.info('{} cells x {} genes'.format(adata.n_obs, adata.n_vars))
     if args.drop != None:
+        logging.info('Dropping cells from list: %s'%args.drop)
         drop_cells_from_list(adata, open(args.drop, 'r').read().splitlines())
+        logging.info('Forced to remove {} cells from given list. {} left'.format(len(adata.uns['removedCells']), adata.n_obs))
     if args.transform:
+        logging.info('Log2 Transforming on input matrix')
         log2Transformation(adata)
+    #TODO: Allow filtration parameter tobe twisted from command line
     filter_genes(adata, min_pct_cells = 0.02, expr_cutoff = 1)
+    logging.info('Reordering genes with GTF annotation: {}'.format(args.gtf))
     adata = order_genes_by_gtf(adata, args.gtf, ident = args.geneIdent)
 
     # Processing the normal sample control
-    logging.info("Reading the normal control sample profile")
+    logging.info("Reading the normal control sample profile: {}".format(args.normal))
     adata_normal = read_matrix(args.normal, 
                                rowname = args.rowname_normal, 
+                               name = 'normalControl', 
                                workdir = args.output)
     adata_normal = keep_genes_as_list(adata_normal, adata.var_names)
     if args.transform:
+        logging.info('Log2 Transforming on normal control samples')
         log2Transformation(adata_normal)
 
+    # Normalize and plot
+    logging.info('Normalizing the input matrix against the normal control.')
     zscore_norm(adata, against = adata_normal, by = 'gene')
+    logging.info('Plotting CNVmap')
     plot_CNVmap(adata, 
                 n_cluster = args.cluster, 
                 downsampleRate = args.downsample, 

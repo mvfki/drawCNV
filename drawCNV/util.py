@@ -1,7 +1,6 @@
 '''Minor and simple functions'''
 import logging
 import numpy as np
-logging.basicConfig(level=logging.DEBUG, format='%(levelname)s::%(message)s')
 
 def iter_lines(file_like):
     """ Helper for iterating only nonempty lines without line breaks"""
@@ -17,17 +16,6 @@ def is_float(string):
         return True
     except ValueError:
         return False
-
-def drop_cells_from_list(adata, droplist):
-    droplist = set(droplist)
-    if len(droplist) == 0:
-        return
-    remainingIdx = []
-    for i in range(adata.obs_names.size):
-        if adata.obs_names[i] not in droplist:
-            remainingIdx.append(i)
-    adata._inplace_subset_obs(remainingIdx)
-    logging.info('Forced to remove {} cells from given list. {} left'.format(len(droplist), adata.n_obs))
 
 def keep_genes_as_list(adata, geneList):
     ordered_idx = []

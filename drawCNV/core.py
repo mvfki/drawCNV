@@ -11,10 +11,8 @@ import logging
 import re, os, sys
 from copy import deepcopy
 
-logging.basicConfig(level=logging.DEBUG, format='%(levelname)s::%(message)s')
-
 def read_matrix(file_name, delimiter = '\t', rowname = 0, 
-                workdir = 'CNVmap_output'):
+                name = 'inputMatrix', workdir = 'CNVmap_output'):
     '''
     Read the matrix file into standard AnnData object.
     Arguments:
@@ -84,6 +82,8 @@ def read_matrix(file_name, delimiter = '\t', rowname = 0,
     if not os.path.exists(workdir):
         os.makedirs(workdir)
     adata.uns['workdir'] = workdir
+    adata.uns['normalized'] = False
+    adata.uns['name'] = name
     return adata
 
 def add_cell_labels(adata, file_name):
@@ -150,6 +150,33 @@ def add_cell_colors(adata, file_name):
         df_cell_colors.loc[df_cell_colors.index[id_cells], 'label_color'] = adata.uns['label_color'][x]
     adata.obs['label_color'] = df_cell_colors['label_color']
 
+def drop_cells_from_list(adata, droplist):
+    '''Inplace remove cells from given list.
+    Arguments:
+    ----------
+    adata - AnnData object.
+            Annotated data matrix. 
+    droplist - iterables
+               An array with cell identifiers as elements.
+    Returns:
+    ----------
+    updates `adata` with a subset of cells that are not in the droplist. 
+    '''
+    droplist = set(droplist)
+    if len(droplist) == 0:
+        return
+    remainingIdx = []
+    dropped = 0
+    droppedCells = []
+    for i in range(adata.obs_names.size):
+        if adata.obs_names[i] not in droplist:
+            remainingIdx.append(i)
+        else:
+            dropped += 1
+            droppedCells.append(adata.obs_names[i])
+    adata._inplace_subset_obs(remainingIdx)
+    adata.uns['removedCells'] = droppedCells
+
 def log2Transformation(adata):
     '''
     Log2(N + 1) transformation on the array data.
@@ -163,7 +190,6 @@ def log2Transformation(adata):
     X - numpy.ndarray, at adata.X
     The transformed data matrix will replace the original array. 
     '''
-    logging.info('Log2 Transforming')
     adata.X = np.log2(adata.X+1)
 
 def remove_mt_genes(adata):
@@ -244,7 +270,6 @@ def order_genes_by_gtf(adata, GTF_file_name, ident = 'gene_name'):
     adata - AnnData object. 
             A new object where the order of genes updated. 
     '''
-    logging.info('Sorting with GTF annotation: {}'.format(GTF_file_name))
     if ident not in {'gene_id', 'gene_name'}:
         raise ValueError("Identifier must be set within {'gene_id', 'gene_name'}")
     ordered_idx = []
@@ -288,14 +313,15 @@ def zscore_norm(adata, against = None, by = 'gene'):
               Another adata where a contol expression profile is saved in. 
               If None, normalization will be done against the adata itself. 
     by      - str, default "gene".
-              Choose from {"gene", "cell"}. If by "gene", the mean and variance 
-              of each gene will be used for substraction and division, 
-              respectively. 
+              Choose from {"gene", "cell"}. If by "gene", the mean and 
+              variance of each gene will be used for substraction and 
+              division, respectively. 
     Returns:
     ----------
     updates `adata` with the following fields.
-    normalized - numpy.ndarray, at adata.uns['normalized'].
-                 The normalized data matrix.
+    normalized - dict, with keys 'data' - numpy.ndarray, 'against' - str, 
+                 at adata.uns['normalized'].
+                 The normalized data matrix and against.uns['name'] 
     '''
     logging.info('Applying z-score normalization')
     input_data = adata.X.copy()
@@ -306,6 +332,7 @@ def zscore_norm(adata, against = None, by = 'gene'):
     else:
         raise ValueError("'by' argument must be either 'cell' or 'gene'.")
     if against == None:
+        against = adata
         Mean = np.mean(input_data, axis = axis)
         VAR = np.var(input_data, axis = axis)
     else:
@@ -313,8 +340,7 @@ def zscore_norm(adata, against = None, by = 'gene'):
         VAR = np.var(against.X, axis = axis)
 
     Z = (input_data - Mean) / (VAR + 1)
-    
-    adata.uns['normalized'] = Z
+    adata.uns['normalized'] = {'data': Z, 'against': against.uns['name']}
 
 def plot_CNVmap(adata, limit = (-5, 5), window = 150, n_cluster = 2, 
                 fig_size = (12, 8), downsampleRate = 0.2, save_fig = False, 
@@ -351,10 +377,15 @@ def plot_CNVmap(adata, limit = (-5, 5), window = 150, n_cluster = 2,
     updates `adata` with the following fields.
     smoothen - numpy.ndarray, at adata.uns['smoothen']
                The smoothened expression matrix. 
+    normalized - dict, with keys 'data' - numpy.ndarray, 'against' - str, 
+                 at adata.uns['normalized']
     '''
-    logging.info('Plotting CNV map')
     # Process the expression profile
-    input_data = adata.uns['normalized'].copy()
+    if not adata.uns['normalized']:
+        logging.warn('Given matrix is not normalized, normalizing against itself. ')
+        zscore_norm(adata)
+
+    input_data = adata.uns['normalized']['data'].copy()
     set_limit(input_data, limit[0], limit[1])
     input_data -= np.mean(input_data)
     smoothen = np.zeros(input_data.shape)
