@@ -87,7 +87,7 @@ def main():
 
     # Normalize and plot
     logging.info('Normalizing the input matrix against the normal control.')
-    zscore_norm(adata, against = adata_normal, by = 'gene')
+    zscore_norm(adata, against = adata_normal)
     logging.info('Plotting CNVmap')
     plot_CNVmap(adata, 
                 n_cluster = args.cluster, 

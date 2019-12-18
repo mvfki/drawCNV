@@ -5,6 +5,7 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
+import matplotlib.patches as Patches
 from gtfparse import read_gtf
 from .util import *
 import logging
@@ -302,7 +303,7 @@ def order_genes_by_gtf(adata, GTF_file_name, ident = 'gene_name'):
     del adata.var['Chr']
     return adata
 
-def zscore_norm(adata, against = None, by = 'gene'):
+def zscore_norm(adata, against = None):
     '''
     Z-score normalization of the expression profile.
     Arguments:
@@ -312,10 +313,6 @@ def zscore_norm(adata, against = None, by = 'gene'):
     against - AnnData object, default None. 
               Another adata where a contol expression profile is saved in. 
               If None, normalization will be done against the adata itself. 
-    by      - str, default "gene".
-              Choose from {"gene", "cell"}. If by "gene", the mean and 
-              variance of each gene will be used for substraction and 
-              division, respectively. 
     Returns:
     ----------
     updates `adata` with the following fields.
@@ -325,53 +322,51 @@ def zscore_norm(adata, against = None, by = 'gene'):
     '''
     logging.info('Applying z-score normalization')
     input_data = adata.X.copy()
-    if by == 'cell':
-        axis = 1
-    elif by == 'gene':
-        axis = 0
-    else:
-        raise ValueError("'by' argument must be either 'cell' or 'gene'.")
+
     if against == None:
         against = adata
-        Mean = np.mean(input_data, axis = axis)
-        VAR = np.var(input_data, axis = axis)
+        Mean = np.mean(input_data, axis = 0)
+        VAR = np.var(input_data, axis = 0)
     else:
-        Mean = np.mean(against.X, axis = axis)
-        VAR = np.var(against.X, axis = axis)
+        Mean = np.mean(against.X, axis = 0)
+        VAR = np.var(against.X, axis = 0)
 
     Z = (input_data - Mean) / (VAR + 1)
     adata.uns['normalized'] = {'data': Z, 'against': against.uns['name']}
 
 def plot_CNVmap(adata, limit = (-5, 5), window = 150, n_cluster = 2, 
-                fig_size = (12, 8), downsampleRate = 0.2, save_fig = False, 
+                downsampleRate = 0.2, fig_size = (12, 8), 
+                fig_legend_ncol = 4, save_fig = False, 
                 fig_name = 'CNVmap.png'):
     '''Plot the CNV map in a heatmap style with the normalized data matrix. 
     Arguments:
     ----------
-    adata          - AnnData object. 
-                     Annotated data matrix.
-    limit          - tuple with 2 elements, default (-5, 5)
-                     Limit the expression value to be plot within this 
-                     interval. 
-    window         - int, default 150. 
-                     Window average of the expression levels of the 
-                     neighboring N genes will be calculated for each gene, in 
-                     order to smoothen the fluctuations and avoid high 
-                     expression levels that might not come from high CNVs. 
-    n_cluster      - int, default 2. 
-                     Number of clusters to cut the hierarchical clustering 
-                     result. 
-    downsampleRate - float that > 0 and < 1, default 0.2. 
-                     Proportion of total genes to pick from. Smaller value 
-                     increases the speed and decreases the resolution. 
-    fig_size       - tuple with 2 elements, default (12, 8)
-                     The size of the output figure, in inches.
-    save_fig       - bool, default False. 
-                     Whether to save the figure. If True, figure would be 
-                     saved to "workdir"; else, the figure would show if 
-                     possible. 
-    fig_name       - str, path like, default "CNVmap.png"
-                     Name of the figure file. 
+    adata           - AnnData object. 
+                      Annotated data matrix.
+    limit           - tuple with 2 elements, default (-5, 5)
+                      Limit the expression value to be plot within this 
+                      interval. 
+    window          - int, default 150. 
+                      Window average of the expression levels of the 
+                      neighboring N genes will be calculated for each gene, 
+                      in order to smoothen the fluctuations and avoid high 
+                      expression levels that might not come from high CNVs. 
+    n_cluster       - int, default 2. 
+                      Number of clusters to cut the hierarchical clustering 
+                      result. 
+    downsampleRate  - float that > 0 and < 1, default 0.2. 
+                      Proportion of total genes to pick from. Smaller value 
+                      increases the speed and decreases the resolution. 
+    fig_size        - tuple with 2 elements, default (12, 8)
+                      The size of the output figure, in inches.
+    fig_legend_ncol - int, default 4.
+                      Number of columns to display the legends
+    save_fig        - bool, default False. 
+                      Whether to save the figure. If True, figure would be 
+                      saved to "workdir"; else, the figure would show if 
+                      possible. 
+    fig_name        - str, path like, default "CNVmap.png"
+                      Name of the figure file. 
     Returns:
     ----------
     updates `adata` with the following fields.
@@ -404,7 +399,9 @@ def plot_CNVmap(adata, limit = (-5, 5), window = 150, n_cluster = 2,
     # "sampleOrder" lists the original indices of the samples in the rearranged hierarchy. 
     clusteredX = smoothen[sampleOrder]
     devide_row = [sorted(clusters[sampleOrder]).index(i) for i in set(clusters)]
-    
+    #TODO: Handle the case where only one type of cells. 
+    cell_color = adata.obs['label_color'].iloc[sampleOrder].tolist()
+
     # If too many gene, do a downsampling to be efficient.
     if downsampleRate != None:
         if downsampleRate < 1:
@@ -420,20 +417,38 @@ def plot_CNVmap(adata, limit = (-5, 5), window = 150, n_cluster = 2,
         chrlist = adata.var['chr'].tolist()
     devide_col = [chrlist.index(i) for i in set(chrlist)]
     
+    chr_color = []
+    rg=['#516572', '#d8dcd6']
+    last = chrlist[0]
+    change = 0
+    for i in range(len(chrlist)):
+        if chrlist[i] != last:
+            change += 1
+        chr_color.append(rg[change % 2])    
+        last = chrlist[i]
+
     vmax = 0.9 * (np.max(clusteredX) - np.min(clusteredX)) / 2
     vmin = - vmax
     
     # Start to plot
     figure = sns.clustermap(clusteredX, row_cluster = False, 
+                            row_colors = cell_color, col_colors = chr_color, 
                             col_cluster = False, vmin = vmin, vmax = vmax, 
                             cmap = "RdBu_r", yticklabels = False, 
                             xticklabels = False, figsize = fig_size, 
-                            robust = True) 
+                            robust = True)
+    list_patches = []
+    for x in adata.uns['label_color'].keys():
+        list_patches.append(Patches.Patch(color = adata.uns['label_color'][x],label=x))
     ax = figure.ax_heatmap
     for i in devide_row:
         ax.plot([0, len(subIdx)], [i, i], '-k', linewidth = 0.8)
     for i in devide_col:
         ax.plot([i, i], [0, adata.n_obs], '-k', linewidth = 0.8)
+    ax.legend(handles = list_patches, loc = 'center', 
+              bbox_to_anchor = (0.5, 1.15), ncol = fig_legend_ncol, 
+              fancybox = True, shadow = True, markerscale = 2.5)
+    figure.cax.set_position([.07, .2, .03, .45])
     if save_fig:
         plt.savefig(os.path.join(adata.uns['workdir'], fig_name))
         logging.info('Plot saved to {}'.format(os.path.join(adata.uns['workdir'], fig_name)))
