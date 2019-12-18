@@ -92,7 +92,13 @@ def main():
     plot_CNVmap(adata, 
                 n_cluster = args.cluster, 
                 downsampleRate = args.downsample, 
+                fig_legend_ncol = 8, 
                 save_fig = True)
+    logging.info('Plot saved to {}'.format(os.path.join(adata.uns['workdir'], "CNVmap.png")))
+
+    # Save the sample properties.
+    adata.obs.to_csv(os.path.join(adata.uns['workdir'], "Cell_metadata.tsv"), sep = '\t')
+    logging.info('Cell information saved to {}'.format(os.path.join(adata.uns['workdir'], "Cell_metadata.tsv")))
 
 if __name__ == '__main__':
     main()

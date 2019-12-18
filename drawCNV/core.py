@@ -374,6 +374,8 @@ def plot_CNVmap(adata, limit = (-5, 5), window = 150, n_cluster = 2,
                The smoothened expression matrix. 
     normalized - dict, with keys 'data' - numpy.ndarray, 'against' - str, 
                  at adata.uns['normalized']
+    cluster - pandas.core.series.Series, at adata.obs['cluster']
+              int of cluster id, 1-based.
     '''
     # Process the expression profile
     if not adata.uns['normalized']:
@@ -401,6 +403,17 @@ def plot_CNVmap(adata, limit = (-5, 5), window = 150, n_cluster = 2,
     devide_row = [sorted(clusters[sampleOrder]).index(i) for i in set(clusters)]
     #TODO: Handle the case where only one type of cells. 
     cell_color = adata.obs['label_color'].iloc[sampleOrder].tolist()
+    cl_palette = sns.color_palette("husl", len(set(clusters)))
+    cluster_color = [cl_palette[i - 1] for i in clusters[sampleOrder]]
+    row_col_df = pd.DataFrame({'sample_label': cell_color, 'cluster': cluster_color})
+    cell_list_patches = []
+    for x in adata.uns['label_color'].keys():
+        cell_list_patches.append(Patches.Patch(color = adata.uns['label_color'][x],label=x))
+    cl_list_patches = []
+    for i in range(len(set(clusters))):
+        cl_list_patches.append(Patches.Patch(color = cl_palette[i], label = "Cluster%d"%(i+1)))
+    adata.obs['cluster'] = clusters
+    adata.obs['cluster'] = adata.obs['cluster'].astype('category')
 
     # If too many gene, do a downsampling to be efficient.
     if downsampleRate != None:
@@ -427,30 +440,37 @@ def plot_CNVmap(adata, limit = (-5, 5), window = 150, n_cluster = 2,
         chr_color.append(rg[change % 2])    
         last = chrlist[i]
 
+    # Start to plot
     vmax = 0.9 * (np.max(clusteredX) - np.min(clusteredX)) / 2
     vmin = - vmax
-    
-    # Start to plot
     figure = sns.clustermap(clusteredX, row_cluster = False, 
-                            row_colors = cell_color, col_colors = chr_color, 
-                            col_cluster = False, vmin = vmin, vmax = vmax, 
-                            cmap = "RdBu_r", yticklabels = False, 
-                            xticklabels = False, figsize = fig_size, 
-                            robust = True)
-    list_patches = []
-    for x in adata.uns['label_color'].keys():
-        list_patches.append(Patches.Patch(color = adata.uns['label_color'][x],label=x))
+                            row_colors = [cluster_color, cell_color], 
+                            col_colors = chr_color, col_cluster = False, 
+                            vmin = vmin, vmax = vmax, cmap = "RdBu_r", 
+                            yticklabels = False, xticklabels = False, 
+                            figsize = fig_size, robust = True)
     ax = figure.ax_heatmap
+    # Add line devider for clusters and chromosomes
     for i in devide_row:
         ax.plot([0, len(subIdx)], [i, i], '-k', linewidth = 0.8)
     for i in devide_col:
         ax.plot([i, i], [0, adata.n_obs], '-k', linewidth = 0.8)
-    ax.legend(handles = list_patches, loc = 'center', 
+    # Add cell label legend
+    fig_legend_ncol = min(8, fig_legend_ncol)
+    ax.legend(handles = cell_list_patches, loc = 'center', 
               bbox_to_anchor = (0.5, 1.15), ncol = fig_legend_ncol, 
-              fancybox = True, shadow = True, markerscale = 2.5)
-    figure.cax.set_position([.07, .2, .03, .45])
+              fancybox = True, shadow = False, markerscale = 2.5)
+    # Add cluster label legend
+    nrow_legend1 = np.ceil(len(cell_list_patches) / fig_legend_ncol)
+    legend2_anchor_height = 1.15 + (nrow_legend1) * 0.04 + 0.035
+    ax1 = ax.twinx()
+    ax1.legend(handles = cl_list_patches, loc = 'center', 
+               bbox_to_anchor = (0.5, legend2_anchor_height), 
+               ncol = fig_legend_ncol, fancybox = True, shadow = False, 
+               markerscale = 2.5)
+    figure.cax.set_position([.18, .2, .03, .45])
+
     if save_fig:
         plt.savefig(os.path.join(adata.uns['workdir'], fig_name))
-        logging.info('Plot saved to {}'.format(os.path.join(adata.uns['workdir'], fig_name)))
     else:
         plt.show()
